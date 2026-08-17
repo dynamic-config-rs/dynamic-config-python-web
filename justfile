@@ -15,11 +15,31 @@ lint:
     ruff check .
     ruff format --check .
 
-# The types a caller sees. The frameworks are `ignore_missing_imports`, so
-# this runs with or without them — and checks against the real thing when
-# they are there.
+# The types a caller sees, in both environments CI checks — with the
+# frameworks installed, and without any. They are different checks: a
+# decorator is typed in one and `Any` in the other, so an override that
+# satisfies only the environment you happen to have is how a green local
+# run becomes a red `the types a caller sees`.
 types:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
     mypy --strict src/dynamic_config_web/
+
+    # And again resolving imports against an environment with no framework
+    # in it. `--python-executable` is what makes that cheap: one venv, and
+    # the mypy you already have does the checking.
+    bare=$(mktemp -d)
+    trap 'rm -rf "$bare"' EXIT
+    python -m venv "$bare"
+    # `[dev]` and no framework — the same install CI's second run makes.
+    # It matters that it is `[dev]` rather than bare: `pytest` is in there,
+    # and `dynamic_config_web.pytest` decorates fixtures with it.
+    # `--python-executable` then points the mypy you already have at that
+    # environment, so no second toolchain is built.
+    "$bare/bin/pip" install --quiet -e ".[dev]"
+    echo "→ and with no framework installed"
+    mypy --strict --python-executable "$bare/bin/python" src/dynamic_config_web/
 
 # The shared half. Runs with no framework installed, which is the point:
 # the core is what has to work on every interpreter this package claims.
