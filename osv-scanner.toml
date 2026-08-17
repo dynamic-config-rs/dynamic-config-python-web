@@ -1,0 +1,28 @@
+# Advisories the OSV scan reports that this repository has already decided
+# about, with the decision here rather than in a job's output.
+#
+# This distribution's graph is seven web frameworks and whatever they pull
+# in, which is where advisories actually land — so this file will not stay
+# empty for ever, and the rules for adding to it matter.
+#
+# Every entry names the reason and what would make it expire. An advisory
+# with a fix that is *reachable* never belongs here — it belongs in a floor
+# bump in `pyproject.toml`.
+#
+# Nor does one with **no fix at all**: `scripts/audit-report.py` reports
+# those as warnings rather than failures, so they stay visible every run
+# instead of being silenced once and forgotten. What is left is the narrow
+# case that would otherwise stop a pull request for something nobody here
+# can do: a fix exists and something upstream pins the version out of reach.
+#
+# And one case peculiar to this package: an advisory in a framework this
+# package merely *adapts* is not this package's to answer. Raising an
+# extra's floor past a release people are on is a breaking change (see
+# CHANGELOG.md), so the answer to "Flask 2.2 has an advisory" is usually a
+# note in the book, not a silent floor bump — and never an entry here.
+
+[[IgnoredVulns]]
+# A placeholder that matches nothing, kept so the shape of an entry is
+# visible when the first real one is needed. Remove it then.
+id = "GHSA-0000-0000-0000"
+reason = "example entry; matches nothing"

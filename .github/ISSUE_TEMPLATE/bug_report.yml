@@ -1,0 +1,92 @@
+name: Bug report
+description: An adapter behaves differently from what the documentation says
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The most useful reports are the ones where
+        somebody else can reproduce the problem without guessing.
+
+  - type: dropdown
+    id: framework
+    attributes:
+      label: Which adapter
+      options:
+        - FastAPI
+        - Litestar
+        - Flask
+        - Quart
+        - Django
+        - Django REST Framework
+        - Robyn
+        - django-bolt
+        - the shared core (no framework)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+      placeholder: |
+        `/readyz` answered 200 after three failed reloads, where the book says
+        it should be 503 with `status: degraded`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        The smallest application that shows it — the `setup(...)` call, the
+        handler, and the configuration file. The examples in `examples/` are a
+        good starting point to modify.
+      render: python
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: dynamic-config-py-web version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: base
+    attributes:
+      label: dynamic-config-py version
+      description: "`pip show dynamic-config-py`"
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: framework-version
+    attributes:
+      label: Framework version
+      description: The framework named above, and its version.
+      placeholder: "fastapi 0.115.0"
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Python version, platform and server
+      description: >
+        How it is served matters here more than usual — a pre-forking server,
+        an autoreloader and a single process are three different lifecycles.
+      placeholder: "3.12.4, Linux x86_64, gunicorn -w 4 --preload"
+    validations:
+      required: true
+
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else
+      description: Logs, a `/readyz` body, the output of `explain`.

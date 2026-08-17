@@ -1,0 +1,253 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+# The base wheel is `dynamic-config-py` and the compiled stores are
+# `dynamic-config-py-remote`: the same name with what it adds on the end.
+# This is the third, and `pip install dynamic-config-py[fastapi]` resolves
+# to it — which is the spelling a caller should ever have to type.
+name = "dynamic-config-py-web"
+description = "Native web-framework integrations for dynamic-config-py: FastAPI, Litestar, Flask, Quart, Robyn, Django and django-bolt"
+readme = "README.md"
+license = { text = "MIT" }
+# The base wheel's floor, unchanged. An adapter whose framework needs more
+# says so in its own extra and in the CI matrix, not here: a floor raised
+# for one framework would refuse the other six on an interpreter they
+# support.
+requires-python = ">=3.9"
+authors = [{ name = "Cevat Batuhan Tolon", email = "cevatbatuhan.tolon@gmail.com" }]
+keywords = [
+    "config",
+    "configuration",
+    "hot-reload",
+    "live-reload",
+    "fastapi",
+    "litestar",
+    "flask",
+    "quart",
+    "robyn",
+    "django",
+    "django-rest-framework",
+    "django-ninja",
+    "asgi",
+    "wsgi",
+    "twelve-factor",
+    "healthcheck",
+    "prometheus",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Internet :: WWW/HTTP :: WSGI :: Middleware",
+    "Topic :: System :: Systems Administration",
+    "Environment :: Web Environment",
+    "Framework :: AsyncIO",
+    "Framework :: Django",
+    "Framework :: FastAPI",
+    "Framework :: Flask",
+    "Framework :: Pytest",
+    "Typing :: Typed",
+]
+# One, and it is the whole point: this package is adapters over the engine.
+# No framework is required — each is an extra, and importing this package
+# imports none of them.
+dependencies = ["dynamic-config-py>=0.2"]
+dynamic = ["version"]
+
+[project.entry-points.pytest11]
+dynamic_config_web = "dynamic_config_web.pytest"
+
+[project.urls]
+Homepage = "https://dynamic-config-rs.github.io/web/"
+Documentation = "https://dynamic-config-rs.github.io/web/reference.html"
+Repository = "https://github.com/dynamic-config-rs/dynamic-config-python-web"
+Changelog = "https://github.com/dynamic-config-rs/dynamic-config-python-web/blob/main/CHANGELOG.md"
+Issues = "https://github.com/dynamic-config-rs/dynamic-config-python-web/issues"
+
+[project.optional-dependencies]
+# One extra per framework, each naming the version where the seam this
+# adapter uses became what it is today. A floor rather than a ceiling: a
+# framework's next minor is not this package's business until it breaks
+# something, and the CI matrix is where that is found.
+fastapi = ["fastapi>=0.100"]
+# `InitPlugin` and its `on_app_init` are 2.x.
+# 2 only, and `<4` because Litestar 3 may rename `InitPluginProtocol` —
+# the adapter carries a compatibility shim for the 2.x spellings and
+# cannot promise anything about a major it has not seen.
+litestar = ["litestar>=2.7,<4"]
+# 2.2 is where `before_first_request` stopped being the only way to start
+# something once, which is the hook this adapter would otherwise need.
+flask = ["flask>=2.2"]
+quart = ["quart>=0.19"]
+# Robyn declares **no** `requires-python` on PyPI while its README says
+# 3.10, so pip installs it on 3.9 and the failure surfaces as an import
+# error inside Robyn. The marker is the only thing standing between a 3.9
+# user and that.
+#
+# The floor is the version this adapter was written and tested against
+# rather than the oldest that might work — `SubRouter(prefix=…)` and
+# `robyn.testing` are both recent, and an Experimental adapter guessing at
+# an older seam it has never run is not a promise worth making.
+robyn = ["robyn>=0.88; python_version>='3.10'"]
+django = ["django>=4.2"]
+drf = ["django>=4.2", "djangorestframework>=3.15"]
+# django-ninja declares `requires-python >= 3.7`, so no marker is needed;
+# 1.0 is where `NinjaAPI(auth=...)` and `Router` settled into the shape
+# this adapter registers operations against.
+ninja = ["django>=4.2", "django-ninja>=1.0"]
+# The marker, not a floor: django-bolt requires 3.12, and without this
+# `pip install dynamic-config-py[django-bolt]` on 3.11 is a resolution
+# error rather than a package that is simply not for that interpreter.
+#
+# And an upper bound, which is wrong for every other dependency here and
+# right for this one: django-bolt is 0.10, classified Alpha, and its only
+# contract is its documentation. `<1` says what the adapter was written
+# against; 1.0 is what removes it.
+django-bolt = ["django>=4.2", "django-bolt>=0.10,<1; python_version>='3.12'"]
+# Self-referential, so every floor is written in exactly one place and
+# `[all]` cannot drift from the extra it names. The five that are Beta:
+# Robyn and django-bolt are Experimental and left out deliberately —
+# `[all]` should not install something whose seam may move under it, and
+# django-bolt would refuse to resolve below 3.12 anyway.
+all = [
+    "dynamic-config-py-web[fastapi]",
+    "dynamic-config-py-web[litestar]",
+    "dynamic-config-py-web[flask]",
+    "dynamic-config-py-web[quart]",
+    "dynamic-config-py-web[django]",
+    "dynamic-config-py-web[drf]",
+    "dynamic-config-py-web[ninja]",
+]
+test = ["pytest>=7", "pytest-asyncio>=0.23", "httpx>=0.24"]
+dev = [
+    "pytest>=7",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.24",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "build>=1.2",
+]
+
+[tool.hatch.version]
+path = "src/dynamic_config_web/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dynamic_config_web"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+# ── Linting ────────────────────────────────────────────────────────────
+#
+# The base wheel's configuration, deliberately identical where it applies:
+# three packages that ship together and are read side by side should not be
+# formatted by three sets of rules. The comments explaining each choice are
+# in `dynamic-config-python/dynamic-config-python/pyproject.toml`.
+
+[tool.ruff]
+target-version = "py39"
+line-length = 88
+src = ["src", "tests", "examples"]
+include = ["*.py", "*.pyi"]
+
+[tool.ruff.lint]
+select = [
+    "F",
+    "E",
+    "W",
+    "I",
+    "N",
+    "D",
+    "UP",
+    "B",
+    "A",
+    "C4",
+    "ISC",
+    "PIE",
+    "PT",
+    "RET",
+    "SIM",
+    "TID",
+    "PTH",
+    "ERA",
+    "RUF",
+]
+ignore = ["D203", "D213", "D401", "EM101", "EM102", "UP007", "UP045"]
+
+[tool.ruff.lint.per-file-ignores]
+# `Depends(...)` in a default is FastAPI's own API (B008), not an accident.
+"src/dynamic_config_web/fastapi.py" = ["B008"]
+"tests/*" = ["D100", "D101", "D102", "D103", "D104", "D105", "D107", "S101", "B011"]
+# A driver builds a real application, so `Depends(...)` in a default is
+# FastAPI's own API here too.
+"tests/conformance/*" = [
+    "B008",
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D107",
+    "S101",
+    "B011",
+]
+"examples/*" = ["D101", "D102", "D103", "D105", "D107", "B008", "T201", "INP001"]
+# `audit-report.py` is a byte-for-byte copy of the one in the other
+# repositories here — the same OSV report, read the same way, so a
+# finding reads identically wherever it is raised. Keeping the copies
+# identical is worth more than reformatting one of them.
+"scripts/audit-report.py" = ["D100", "D103", "E501"]
+"scripts/*" = ["INP001", "T201"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.isort]
+known-first-party = ["dynamic_config", "dynamic_config_web"]
+
+# `mypy --strict src/dynamic_config_web/` is what CI and the justfile run;
+# this table is where the two exceptions that strictness cannot express
+# live. It has to exist for mypy to read the overrides below at all.
+[tool.mypy]
+# No `python_version` here: modern mypy refuses to target 3.9, and the
+# floor this package supports is checked by running the suite on it,
+# not by asking a type checker to pretend.
+
+# django-bolt registers routes with `Router.get(...)`, which is untyped —
+# so every handler it decorates is "made untyped", which is a fact about
+# django-bolt and not about this adapter. The handlers themselves are
+# annotated; see the note in `router()` about why they answer `Any`.
+[[tool.mypy.overrides]]
+module = ["dynamic_config_web.django_bolt"]
+disallow_untyped_decorators = false
+
+# Every framework is optional by construction, so in any one environment
+# most of them are missing — including the environment that type-checks
+# this package. `ignore_missing_imports` applies only when the module
+# cannot be found: with the framework installed, mypy checks the adapter
+# against the real thing.
+[[tool.mypy.overrides]]
+module = [
+    "django.*",
+    "django_bolt.*",
+    "flask.*",
+    "litestar.*",
+    "quart.*",
+    "rest_framework.*",
+    "robyn.*",
+]
+ignore_missing_imports = true

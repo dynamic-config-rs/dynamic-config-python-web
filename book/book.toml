@@ -1,0 +1,20 @@
+[book]
+title = "dynamic-config for Web Frameworks"
+authors = ["Cevat Batuhan Tolon"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/dynamic-config-rs/dynamic-config-python-web"
+edit-url-template = "https://github.com/dynamic-config-rs/dynamic-config-python-web/edit/dev/book/src/{path}"
+site-url = "/web/"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+limit-results = 20
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 2

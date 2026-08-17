@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+
+# The book's output; its source is `book/src`.
+book/book/
+
+# What the tests write, when they write outside a temporary directory.
+tests/scratch/
+
+# Editors and platforms
+.idea/
+.vscode/
+.DS_Store

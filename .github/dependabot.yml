@@ -1,0 +1,17 @@
+version: 2
+
+updates:
+  # No Cargo block, and no pip one either. This distribution has exactly one
+  # runtime requirement — `dynamic-config-py` — and seven framework extras,
+  # none of which is locked: a library that pinned its dependencies would pin
+  # its users'. `scripts/resolve-web-audit.py` is what resolves them, and the
+  # OSV job in security.yml is what watches them.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # One grouped bump instead of a queue: an action pin is reviewed the same
+    # way whether one moved or five did.
+    groups:
+      actions:
+        patterns: ["*"]
