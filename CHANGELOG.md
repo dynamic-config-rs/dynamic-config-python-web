@@ -29,6 +29,8 @@ for an adapter and an adapter fix should not drag the wheels behind it.
 
 ## [Unreleased]
 
+## 0.1.0 — 2026-08-18
+
 ### Added
 
 - **The shared core.** `Wiring` (load, watch, stop — idempotent, leased per
