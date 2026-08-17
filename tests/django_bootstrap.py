@@ -13,6 +13,7 @@ route to the previous case's views.
 
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
 
 import django
@@ -21,6 +22,11 @@ from django.urls import clear_url_caches
 
 #: What the root URLconf serves. Rewritten by :func:`route`.
 urlpatterns: list[Any] = []
+
+
+def _installed(*apps: str) -> list[str]:
+    """The subset of `apps` this interpreter can actually import."""
+    return [app for app in apps if importlib.util.find_spec(app) is not None]
 
 
 def bootstrap() -> None:
@@ -37,7 +43,13 @@ def bootstrap() -> None:
         # `ready()` reads `DYNAMIC_CONFIG`, and each case wires a different
         # configuration. `tests/test_django_app.py` exercises that path in a
         # subprocess, where a settings module can name one target.
-        INSTALLED_APPS=["rest_framework", "ninja"],
+        # Only the ones actually installed. Each CI row installs a single
+        # extra — `[drf]` brings `rest_framework`, `[ninja]` brings `ninja`,
+        # `[django]` brings neither — and naming an absent app here fails
+        # `django.setup()` for every Django case in that row, not just the
+        # one that needs it. A developer with all three installed would
+        # never see it.
+        INSTALLED_APPS=_installed("rest_framework", "ninja"),
         MIDDLEWARE=[
             "dynamic_config_web.django.middleware.DynamicConfigMiddleware",
         ],

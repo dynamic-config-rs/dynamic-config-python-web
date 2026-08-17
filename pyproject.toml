@@ -227,13 +227,39 @@ known-first-party = ["dynamic_config", "dynamic_config_web"]
 # floor this package supports is checked by running the suite on it,
 # not by asking a type checker to pretend.
 
-# django-bolt registers routes with `Router.get(...)`, which is untyped —
-# so every handler it decorates is "made untyped", which is a fact about
-# django-bolt and not about this adapter. The handlers themselves are
-# annotated; see the note in `router()` about why they answer `Any`.
+# The adapters are type-checked twice: once with every framework installed,
+# and once with none of them — the environment most users type-check in, and
+# the one CI's second `mypy` run reproduces. Three of `--strict`'s rules
+# cannot hold in both, because each depends on whether an optional import
+# resolved:
+#
+#   disallow_untyped_decorators  `@app.get(...)` is typed when the framework
+#                                is there and `Any` when it is not, so the
+#                                handlers it decorates are "made untyped"
+#                                only in the second environment. (For
+#                                django-bolt it is untyped in *both*:
+#                                `Router.get` carries no annotations.)
+#   warn_unused_ignores          an ignore that silences a real complaint
+#                                from the installed framework has nothing to
+#                                silence when the import failed.
+#   disallow_subclassing_any     `InitPlugin` is a class in one environment
+#                                and `Any` in the other.
+#
+# Everything else stays strict, and the shared core — which imports no
+# framework — keeps all three.
 [[tool.mypy.overrides]]
-module = ["dynamic_config_web.django_bolt"]
+module = [
+    "dynamic_config_web.fastapi",
+    "dynamic_config_web.litestar",
+    "dynamic_config_web.flask",
+    "dynamic_config_web.quart",
+    "dynamic_config_web.robyn",
+    "dynamic_config_web.django_bolt",
+    "dynamic_config_web.django.*",
+]
 disallow_untyped_decorators = false
+warn_unused_ignores = false
+disallow_subclassing_any = false
 
 # Every framework is optional by construction, so in any one environment
 # most of them are missing — including the environment that type-checks
@@ -242,10 +268,13 @@ disallow_untyped_decorators = false
 # against the real thing.
 [[tool.mypy.overrides]]
 module = [
+    "asgiref.*",
     "django.*",
     "django_bolt.*",
+    "fastapi.*",
     "flask.*",
     "litestar.*",
+    "ninja.*",
     "quart.*",
     "rest_framework.*",
     "robyn.*",
