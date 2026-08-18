@@ -29,6 +29,8 @@ for an adapter and an adapter fix should not drag the wheels behind it.
 
 ## [Unreleased]
 
+## 0.2.0 — 2026-08-18
+
 ### Changed
 
 - **The route table is written once.** Six adapters — FastAPI, Litestar,
