@@ -4,7 +4,7 @@
 conditions, and a service that conflates them either refuses traffic it
 could serve or accepts traffic on a configuration nobody has been able to
 reload for an hour. The Python book states the pair; this builds the two
-answers so seven adapters do not each write them.
+answers so nine adapters do not each write them.
 
 **No value ever reaches the body.** Generations, counts, kinds, paths and
 seconds — the same rule the engine's own diagnostics follow, and for the

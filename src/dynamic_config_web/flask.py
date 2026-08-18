@@ -34,10 +34,9 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING, Any, Optional
 
-from ._diagnostics import Guard, check, explain, never
+from ._diagnostics import Guard
 from ._errors import MissingFrameworkError
-from ._health import liveness, readiness
-from ._metrics import CONTENT_TYPE, metrics_body
+from ._routes import RouteContext, RouteError, allowed, route_table
 from ._scope import current, enter, get, leave
 from ._wiring import Wiring
 
@@ -261,67 +260,58 @@ def blueprint(
     guard: Optional[Guard] = None,
     diagnostics_prefix: str = "/_config",
 ) -> Blueprint:
-    """The health, metrics and diagnostics routes, as a blueprint."""
+    """The health, metrics and diagnostics routes, as a blueprint.
+
+    The routes are the shared table; this translates them into Flask —
+    `<path:path>` for the tail, a `Response` from each `Reply`, and the
+    WSGI adapters' own convention for a refused guard: **404**, so a
+    guarded route is indistinguishable from an absent one. Synchronous
+    handlers, and that is right here: WSGI has no event loop to keep
+    free.
+    """
     routes = Blueprint("dynamic_config", __name__, url_prefix=prefix or None)
 
-    @routes.get("/healthz")
-    def healthz() -> Response:
-        """The process is up. Configuration has no say in this one."""
-        report = liveness()
+    table = route_table(
+        wiring,
+        metrics=metrics,
+        stale_after=stale_after,
+        guard=guard,
+        diagnostics_prefix=diagnostics_prefix,
+    )
 
-        return _json(report.body, report.status_code)
+    def make(entry: Any) -> Any:
+        def handler(path: str = "") -> Response:
+            if entry.guarded:
+                try:
+                    allowed(request, guard, refused=404)
+                except RouteError as stopped:
+                    return _reply_of(stopped)
 
-    @routes.get("/readyz")
-    def readyz() -> Response:
-        """Serving something, and the reloads since have worked."""
-        report = readiness(*wiring.configs, stale_after=stale_after)
-
-        return _json(report.body, report.status_code)
-
-    if metrics:
-
-        @routes.get("/metrics")
-        def prometheus() -> Response:
-            """The engine's series, built per scrape."""
-            return Response(metrics_body(*wiring.configs), mimetype=CONTENT_TYPE)
-
-    if guard is not None and guard is not never:
-        diagnostics = Blueprint(
-            "dynamic_config_diagnostics", __name__, url_prefix=diagnostics_prefix
-        )
-
-        @diagnostics.get("/explain/<path:path>")
-        def explain_path(path: str) -> Response:
-            """Every layer's answer for one dotted path.
-
-            Synchronous, and that is fine here: WSGI has no event loop to
-            keep free, and this is the one place in the package where the
-            blocking form is the right one.
-            """
-            if not guard(request):
-                return _json({"detail": "not found"}, 404)
+            context = RouteContext(path_param=path or None, query=request.args)
 
             try:
-                config = wiring.config(request.args.get("config"))
-            except LookupError as unknown:
-                return _json({"detail": str(unknown)}, 400)
+                reply = entry.handle(context)
+            except RouteError as stopped:
+                return _reply_of(stopped)
 
-            return Response(explain(config, path), mimetype="text/plain")
-
-        @diagnostics.get("/check")
-        def check_all() -> Response:
-            """Would each configuration load, and any unknown keys."""
-            if not guard(request):
-                return _json({"detail": "not found"}, 404)
-
-            return _json(
-                {config.key: check(config) for config in wiring.configs},
-                200,
+            return Response(
+                reply.body, status=reply.status, mimetype=reply.content_type
             )
 
-        routes.register_blueprint(diagnostics)
+        handler.__name__ = f"config_{entry.name}"
+
+        return handler
+
+    for entry in table:
+        rule = entry.path.replace("{path}", "<path:path>")
+        routes.get(rule)(make(entry))
 
     return routes
+
+
+def _reply_of(stopped: RouteError) -> Response:
+    """A refusal, in Flask's shape."""
+    return _json({"detail": stopped.detail}, stopped.status)
 
 
 def _json(body: Any, status: int) -> Response:

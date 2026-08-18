@@ -47,10 +47,9 @@ import json
 import threading
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
-from ._diagnostics import Guard, check_async, explain_async, never
+from ._diagnostics import Guard
 from ._errors import MissingFrameworkError
-from ._health import liveness, readiness
-from ._metrics import CONTENT_TYPE, metrics_body
+from ._routes import RouteContext, RouteError, allowed, route_table
 from ._scope import current, enter, get, leave
 from ._wiring import Wiring
 
@@ -215,70 +214,55 @@ def router(
     # reason a user's own suite prints a deprecation warning.
     routes = SubRouter(prefix=prefix)
 
-    async def healthz(request: Any) -> Response:
-        """The process is up. Configuration has no say in this one."""
-        del request
+    table = route_table(
+        running,
+        metrics=metrics,
+        stale_after=stale_after,
+        guard=guard,
+        diagnostics_prefix=diagnostics_prefix,
+    )
 
-        report = liveness()
+    def make(entry: Any) -> Any:
+        async def handler(request: Any) -> Response:
+            if entry.guarded:
+                try:
+                    allowed(request, guard, refused=404)
+                except RouteError as stopped:
+                    return _json({"detail": stopped.detail}, stopped.status)
 
-        return _json(report.body, report.status_code)
+            query = dict((request.query_params.to_dict() or {}).items())
+            # Robyn's query values arrive as lists.
+            flat = {
+                key: value[0] if isinstance(value, list) else value
+                for key, value in query.items()
+            }
 
-    async def readyz(request: Any) -> Response:
-        """Serving something, and the reloads since have worked."""
-        del request
-
-        report = readiness(*running.configs, stale_after=stale_after)
-
-        return _json(report.body, report.status_code)
-
-    routes.add_route(HttpMethod.GET, "/healthz", healthz)
-    routes.add_route(HttpMethod.GET, "/readyz", readyz)
-
-    if metrics:
-
-        async def prometheus(request: Any) -> Response:
-            """The engine's series, built per scrape."""
-            del request
-
-            return _text(metrics_body(*running.configs), CONTENT_TYPE)
-
-        routes.add_route(HttpMethod.GET, "/metrics", prometheus)
-
-    if guard is not None and guard is not never:
-
-        async def explain_path(request: Any) -> Response:
-            """Every layer's answer for one dotted path, off the loop."""
-            if not guard(request):
-                return _json({"detail": "not found"}, 404)
-
-            try:
-                config = running.config(
-                    request.query_params.get("config", None) or None
-                )
-            except LookupError as unknown:
-                return _json({"detail": str(unknown)}, 400)
-
-            path = request.path_params.get("path", "")
-
-            return _text(await explain_async(config, path), "text/plain")
-
-        async def check_all(request: Any) -> Response:
-            """Would each configuration load, and any unknown keys."""
-            if not guard(request):
-                return _json({"detail": "not found"}, 404)
-
-            return _json(
-                {config.key: await check_async(config) for config in running.configs},
-                200,
+            context = RouteContext(
+                path_param=request.path_params.get("path", "") or None,
+                query=flat,
             )
 
+            try:
+                reply = await entry.handle_async(context)
+            except RouteError as stopped:
+                return _json({"detail": stopped.detail}, stopped.status)
+
+            return Response(
+                status_code=reply.status,
+                headers=Headers({"content-type": reply.content_type}),
+                description=reply.body,
+            )
+
+        handler.__name__ = f"config_{entry.name}"
+
+        return handler
+
+    for entry in table:
         # `*path` rather than `:path`: a dotted path is one segment, but a
         # caller who writes `database.pool.size` should not have to know
         # that, and the catch-all is what makes a slash in it harmless.
-        routes.add_route(
-            HttpMethod.GET, f"{diagnostics_prefix}/explain/*path", explain_path
-        )
-        routes.add_route(HttpMethod.GET, f"{diagnostics_prefix}/check", check_all)
+        rule = entry.path.replace("{path}", "*path")
+        routes.add_route(HttpMethod.GET, rule, make(entry))
 
     return routes
 

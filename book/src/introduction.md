@@ -1,5 +1,9 @@
 # Web Integrations
 
+> **Python.** This book covers the *Python* web adapters
+> (`dynamic-config-py-web`). The Rust web crates — axum, Actix, Loco,
+> tower — have [their own book](https://dynamic-config-rs.github.io/rust-web/).
+
 `dynamic-config-py` resolves configuration and hands a program a validated
 model that a file edit can replace while the process serves. Everything a
 *web* application needs around that — where the watcher starts, how a

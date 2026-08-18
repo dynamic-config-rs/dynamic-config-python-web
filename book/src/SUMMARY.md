@@ -4,6 +4,7 @@
 
 # Guide
 
+- [Quick Start](quick-start.md)
 - [The Rules](rules.md)
 - [Wiring & Lifetime](wiring.md)
 - [The Request Scope](scope.md)

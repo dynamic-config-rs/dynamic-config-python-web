@@ -7,7 +7,7 @@ name: Security
 #
 # That matters more here than anywhere else in the organisation: this is the
 # one distribution whose dependency graph is somebody else's web framework —
-# seven of them — and a web framework is where advisories actually land.
+# nine of them — and a web framework is where advisories actually land.
 #
 # No push trigger for `dev` — same reasoning as ci.yml: dev travels through
 # pull requests, and a push twin under required checks poisons the gate.
@@ -89,6 +89,36 @@ jobs:
           fail-on-severity: low
           comment-summary-in-pr: on-failure
 
+  published:
+    name: the published wheel is still pure
+    # Schedule and dispatch only: this asks PyPI, not the tree, so a pull
+    # request cannot change its answer — but a compromised upload can, and
+    # a weekly read is how that is noticed here rather than in an issue.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: what PyPI serves imports no framework
+        run: |
+          pip install --quiet dynamic-config-py-web
+          python - <<'CHECK'
+          import sys
+
+          import dynamic_config_web
+
+          frameworks = {
+              "django", "django_bolt", "fastapi", "flask",
+              "litestar", "quart", "rest_framework", "robyn", "starlette",
+          }
+          arrived = sorted(n for n in sys.modules if n.split(".")[0] in frameworks)
+
+          assert not arrived, f"the published wheel pulled in {arrived}"
+          print(f"pure, at {dynamic_config_web.__version__}")
+          CHECK
+
   # The one status branch protection requires from this workflow — same
   # reasoning as CI's gate. `supply-chain` IS in the needs even though it only
   # exists on pull requests: the gate's own check tolerates `skipped`, so a
@@ -96,7 +126,7 @@ jobs:
   # — which is the whole point of running it.
   security-ok:
     name: Security is green
-    needs: [osv, supply-chain]
+    needs: [osv, supply-chain, published]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

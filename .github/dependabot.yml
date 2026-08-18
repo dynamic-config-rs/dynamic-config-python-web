@@ -2,7 +2,7 @@ version: 2
 
 updates:
   # No Cargo block, and no pip one either. This distribution has exactly one
-  # runtime requirement — `dynamic-config-py` — and seven framework extras,
+  # runtime requirement — `dynamic-config-py` — and nine framework extras,
   # none of which is locked: a library that pinned its dependencies would pin
   # its users'. `scripts/resolve-web-audit.py` is what resolves them, and the
   # OSV job in security.yml is what watches them.

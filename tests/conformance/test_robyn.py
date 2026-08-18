@@ -102,6 +102,28 @@ class RobynDriver:
                 "same_object": first is second,
             }
 
+        @app.get("/pair")
+        @scoped
+        async def pair(request: Any) -> dict[str, Any]:
+            """Every configuration in the wiring, pinned by one scope."""
+            del request
+
+            first = {c.key: current(c).host for c in wiring.configs}
+
+            for member in wiring.configs:
+                if member.key != "db":
+                    member.set_override("host", "moved.internal")
+                member.reload()
+
+            second = {c.key: current(c).host for c in wiring.configs}
+
+            return {
+                "db_first": first["db"],
+                "db_second": second["db"],
+                "extra_first": first.get("extra"),
+                "extra_second": second.get("extra"),
+            }
+
         client = RobynClient(app)
 
         # What the server does around the request loop, and what the test

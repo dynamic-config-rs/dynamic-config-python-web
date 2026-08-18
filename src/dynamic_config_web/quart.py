@@ -31,10 +31,9 @@ import threading
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Optional
 
-from ._diagnostics import Guard, check_async, explain_async, never
+from ._diagnostics import Guard
 from ._errors import MissingFrameworkError
-from ._health import liveness, readiness
-from ._metrics import CONTENT_TYPE, metrics_body
+from ._routes import RouteContext, RouteError, allowed, route_table
 from ._scope import current, enter, get, leave
 from ._wiring import Wiring
 
@@ -229,62 +228,55 @@ def blueprint(
     guard: Optional[Guard] = None,
     diagnostics_prefix: str = "/_config",
 ) -> Blueprint:
-    """The health, metrics and diagnostics routes, as a Quart blueprint."""
+    """The health, metrics and diagnostics routes, as a Quart blueprint.
+
+    The shared table, translated: async handlers (Quart's whole point),
+    `<path:path>` for the tail, and the WSGI-family refusal convention —
+    **404**, a guarded route indistinguishable from an absent one.
+    """
     routes = Blueprint("dynamic_config", __name__, url_prefix=prefix or None)
 
-    @routes.get("/healthz")
-    async def healthz() -> Response:
-        """The process is up. Configuration has no say in this one."""
-        report = liveness()
+    table = route_table(
+        wiring,
+        metrics=metrics,
+        stale_after=stale_after,
+        guard=guard,
+        diagnostics_prefix=diagnostics_prefix,
+    )
 
-        return _json(report.body, report.status_code)
+    def make(entry: Any) -> Any:
+        async def handler(path: str = "") -> Response:
+            if entry.guarded:
+                try:
+                    allowed(request, guard, refused=404)
+                except RouteError as stopped:
+                    return _reply_of(stopped)
 
-    @routes.get("/readyz")
-    async def readyz() -> Response:
-        """Serving something, and the reloads since have worked."""
-        report = readiness(*wiring.configs, stale_after=stale_after)
-
-        return _json(report.body, report.status_code)
-
-    if metrics:
-
-        @routes.get("/metrics")
-        async def prometheus() -> Response:
-            """The engine's series, built per scrape."""
-            return Response(metrics_body(*wiring.configs), mimetype=CONTENT_TYPE)
-
-    if guard is not None and guard is not never:
-        diagnostics = Blueprint(
-            "dynamic_config_diagnostics", __name__, url_prefix=diagnostics_prefix
-        )
-
-        @diagnostics.get("/explain/<path:path>")
-        async def explain_path(path: str) -> Response:
-            """Every layer's answer for one dotted path, off the loop."""
-            if not guard(request):
-                return _json({"detail": "not found"}, 404)
+            context = RouteContext(path_param=path or None, query=request.args)
 
             try:
-                config = wiring.config(request.args.get("config"))
-            except LookupError as unknown:
-                return _json({"detail": str(unknown)}, 400)
+                reply = await entry.handle_async(context)
+            except RouteError as stopped:
+                return _reply_of(stopped)
 
-            return Response(await explain_async(config, path), mimetype="text/plain")
-
-        @diagnostics.get("/check")
-        async def check_all() -> Response:
-            """Would each configuration load, and any unknown keys."""
-            if not guard(request):
-                return _json({"detail": "not found"}, 404)
-
-            return _json(
-                {config.key: await check_async(config) for config in wiring.configs},
-                200,
+            return Response(
+                reply.body, status=reply.status, mimetype=reply.content_type
             )
 
-        routes.register_blueprint(diagnostics)
+        handler.__name__ = f"config_{entry.name}"
+
+        return handler
+
+    for entry in table:
+        rule = entry.path.replace("{path}", "<path:path>")
+        routes.get(rule)(make(entry))
 
     return routes
+
+
+def _reply_of(stopped: RouteError) -> Response:
+    """A refusal, in Quart's shape."""
+    return _json({"detail": stopped.detail}, stopped.status)
 
 
 def _json(body: Any, status: int) -> Response:

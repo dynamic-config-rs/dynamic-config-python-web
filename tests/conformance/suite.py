@@ -1,6 +1,6 @@
 """The contract every adapter passes, written once.
 
-Seven frameworks, one set of promises. What differs between them is the
+Nine frameworks, one set of promises. What differs between them is the
 vocabulary — a `Depends`, an extension object, a plugin, a middleware —
 and what must not differ is the behaviour: one reading per request, one
 watcher per app lifetime, a readiness endpoint that tells *serving
@@ -132,6 +132,54 @@ def case_a_request_never_tears_across_a_reload(
 
         # And the next request is not stale: a scope is not a cache.
         assert client.get("/probe").json()["host"] == "reloaded-mid-request"
+
+
+def case_a_scope_covers_every_configuration_it_was_given(
+    driver: Driver, wiring: Wiring, config_file: Path
+) -> None:
+    """Two configurations, one scope, one reading of each.
+
+    Every other case wires one configuration, which leaves the scope's
+    whole multi-configuration side — the by-key read, and the pinning of
+    *several* sections at once — resting on unit tests. This one builds a
+    second configuration beside the first, hands the driver a wiring over
+    a group of both, and asks the handler to read both, reload both
+    underneath itself, and read both again: four reads, one scope, no
+    movement inside the request — and the next request sees the installs.
+    """
+    from dynamic_config import ConfigGroup, DynamicConfig
+    from helpers import Database
+
+    extra_file = config_file.parent / "extra.toml"
+    extra_file.write_text(
+        '[extra]\nhost = "second.internal"\nport = 1\npool_size = 2\n'
+    )
+
+    extra = DynamicConfig(Database, key="extra").file(str(extra_file))
+    pair = Wiring(ConfigGroup(wiring.configs[0], extra), watch=False)
+
+    with pair:
+        with driver.client(pair) as client:
+            answer = client.get("/pair")
+
+            assert answer.status_code == 200
+
+            body = answer.json()
+
+            assert body["db_first"] == body["db_second"], (
+                "the first configuration moved inside one request"
+            )
+            assert body["extra_first"] == body["extra_second"], (
+                "the second configuration moved inside one request"
+            )
+            assert body["extra_first"] == "second.internal"
+
+        # A fresh request sees what the handler's reloads installed: the
+        # scope pinned the last request, it did not become a cache.
+        with driver.client(pair) as client:
+            after = client.get("/pair").json()
+
+            assert after["extra_first"] == "moved.internal"
 
 
 def case_a_missing_scope_is_refused(
@@ -336,6 +384,7 @@ def case_a_watched_file_reaches_the_handler(
 _CASES = (
     case_a_request_reads_the_configuration,
     case_a_request_never_tears_across_a_reload,
+    case_a_scope_covers_every_configuration_it_was_given,
     case_a_missing_scope_is_refused,
     case_the_watcher_is_paired_with_the_app,
     case_building_the_app_twice_does_not_collide,

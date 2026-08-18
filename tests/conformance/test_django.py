@@ -89,6 +89,30 @@ def tear(request: Any) -> JsonResponse:
     )
 
 
+def pair(request: Any) -> JsonResponse:
+    """Every configuration in the wiring, pinned by one scope."""
+    del request
+
+    wiring = dj.wiring()
+    first = {c.key: current(c).host for c in wiring.configs}
+
+    for member in wiring.configs:
+        if member.key != "db":
+            member.set_override("host", "moved.internal")
+        member.reload()
+
+    second = {c.key: current(c).host for c in wiring.configs}
+
+    return JsonResponse(
+        {
+            "db_first": first["db"],
+            "db_second": second["db"],
+            "extra_first": first.get("extra"),
+            "extra_second": second.get("extra"),
+        }
+    )
+
+
 class DjangoDriver:
     """What the shared suite needs to know about Django."""
 
@@ -114,6 +138,7 @@ class DjangoDriver:
                 *type(self).routes(install),
                 path("probe", probe),
                 path("tear", tear),
+                path("pair", pair),
             ]
         )
 

@@ -545,3 +545,248 @@ def test_importing_the_core_imports_no_framework() -> None:
 def test_the_surface_is_sorted() -> None:
     assert list(web.__all__) == sorted(web.__all__)
     assert all(hasattr(web, name) for name in web.__all__)
+
+
+# ── the scope's generation check ─────────────────────────────────────────
+#
+# With two configurations a scope is two reads over two independent atomic
+# cells, and a reload landing between them puts two generations in one
+# request. `enter()` reads the install counters before and after, and
+# starts over when anything moved — the same check, with the same retry
+# budget, as the Rust web core's `Sections::take`. These fakes script the
+# counter so both branches run deterministically; the conformance suite's
+# `multi_config_scope` case covers the same property through every
+# adapter, and the stress test below covers it under real threads.
+
+
+class _Scripted:
+    """A configuration whose generation moves on a script.
+
+    `try_current` answers a model stamped with the generation it was read
+    at, so a torn snapshot is visible as two different stamps.
+    """
+
+    def __init__(self, key: str, moves_during_reads: int) -> None:
+        self.key = key
+        self._generation = 1
+        self._reads = 0
+        self._moves = moves_during_reads
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def try_current(self) -> tuple[str, int]:
+        self._reads += 1
+        # A "reload" lands after this read and before the re-check, as
+        # many times as the script says.
+        if self._moves > 0:
+            self._moves -= 1
+            self._generation += 1
+        return (self.key, self._generation)
+
+
+def test_a_scope_over_two_configs_retries_until_the_reads_agree() -> None:
+    from dynamic_config_web import _scope
+
+    steady = _Scripted("a", moves_during_reads=0)
+    moving = _Scripted("b", moves_during_reads=1)
+
+    token = _scope.enter([steady, moving])
+    try:
+        snapshot = _scope._SNAPSHOT.get()
+        assert snapshot is not None
+        # The disturbed first read was refused; the second agreed.
+        assert snapshot.by_key("b")[1] == moving.generation
+        assert moving._reads == 2, "one retry, exactly"
+    finally:
+        _scope.leave(token)
+
+
+def test_a_scope_that_cannot_win_serves_the_last_read() -> None:
+    from dynamic_config_web import _scope
+
+    steady = _Scripted("a", moves_during_reads=0)
+    # Move on every read the budget allows, and then one more for the
+    # final unchecked read: the scope still answers rather than raising.
+    restless = _Scripted("b", moves_during_reads=_scope._ATTEMPTS + 1)
+
+    token = _scope.enter([steady, restless])
+    try:
+        snapshot = _scope._SNAPSHOT.get()
+        assert snapshot is not None
+        assert snapshot.by_key("a") is not None
+        assert snapshot.by_key("b") is not None
+        assert restless._reads == _scope._ATTEMPTS + 1
+    finally:
+        _scope.leave(token)
+
+
+def test_a_single_config_scope_never_pays_for_the_check() -> None:
+    from dynamic_config_web import _scope
+
+    alone = _Scripted("a", moves_during_reads=0)
+
+    token = _scope.enter([alone])
+    try:
+        assert alone._reads == 1, "one section cannot straddle anything"
+    finally:
+        _scope.leave(token)
+
+
+def test_two_real_configs_never_tear_under_a_reload_storm(
+    tmp_path: Path,
+) -> None:
+    """Real engine, real threads: a scope never *mixes* across an install.
+
+    What the generation check promises — and all it promises — is that no
+    install lands between a scope's reads. Two configurations reloaded at
+    different moments may legitimately sit at different versions, and a
+    scope opened in that window correctly reports the split world; no
+    check short of a cross-config epoch could promise otherwise.
+
+    So the assertion is the invariant tearing alone can break. The writer
+    always installs `left` before `right`; the reader reads `left` before
+    `right` too. Every stable world therefore has `right <= left` — the
+    only way a scope can see `right` NEWER than `left` is by reading
+    `left` before an install pair and `right` after it, which is exactly
+    the mixed read the check retries away.
+    """
+    import json
+    import threading
+    import time
+    from dataclasses import dataclass
+
+    path = tmp_path / "config.json"
+
+    def write_counter(n: int) -> None:
+        path.write_text(json.dumps({"left": {"n": n}, "right": {"n": n}}))
+
+    write_counter(0)
+
+    @dataclass
+    class Half:
+        n: int = 0
+
+    left = DynamicConfig(Half, key="left").file(str(path))
+    right = DynamicConfig(Half, key="right").file(str(path))
+    left.init()
+    right.init()
+
+    stop = threading.Event()
+    inversions: list[tuple[int, int]] = []
+
+    # Two watchers never fire at the same instant, so the writer installs
+    # the halves with a real gap between them — the window a torn scope
+    # falls into. A short switch interval makes the scheduler actually
+    # interleave the readers with it.
+    previous_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-5)
+
+    def reader() -> None:
+        while not stop.is_set():
+            with web.scope(left, right):
+                a = web.current(left).n
+                b = web.current(right).n
+                if b > a:
+                    inversions.append((a, b))
+
+    def writer() -> None:
+        n = 0
+        while not stop.is_set():
+            n += 1
+            write_counter(n)
+            # Back to back: a reader descheduled between its two reads can
+            # then straddle the whole install pair, which is the mix the
+            # check exists to refuse.
+            left.reload()
+            right.reload()
+
+    threads = [threading.Thread(target=reader) for _ in range(4)]
+    threads.append(threading.Thread(target=writer))
+    for thread in threads:
+        thread.start()
+
+    try:
+        time.sleep(0.5)
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join(timeout=5)
+        sys.setswitchinterval(previous_interval)
+
+    assert not inversions, f"a scope mixed reads across an install: {inversions[:5]}"
+
+
+def test_a_scope_over_an_unloaded_config_defers_to_the_engine(
+    tmp_path: Path,
+) -> None:
+    """A config that had not loaded when the request began is not pinned.
+
+    The scope holds `None` for it, and `current()` falls through to the
+    engine — raising `NotInitialisedError` exactly as an unscoped read
+    would, and answering the live model once a load lands mid-request.
+    Deliberate, and worth a test: the fallback means such a request is
+    *not* isolated from a reload, which is different from every loaded
+    configuration in the same scope.
+    """
+    from dynamic_config import NotInitialisedError
+
+    path = tmp_path / "late.toml"
+    path.write_text('[late]\nhost = "late.internal"\nport = 5432\npool_size = 8\n')
+
+    late = DynamicConfig(Database, key="late").file(str(path))
+
+    with web.scope(late):
+        # Nothing loaded yet: the engine's own refusal comes through.
+        with pytest.raises(NotInitialisedError):
+            web.current(late)
+
+        # A load landing mid-request becomes visible — the unloaded slot
+        # defers, it does not pin.
+        late.init()
+
+        assert web.current(late).host == "late.internal"
+
+
+def test_concurrent_async_requests_each_hold_their_own_scope(
+    wiring: Wiring, config_file: Path
+) -> None:
+    """Scopes are task-local: N tasks, N snapshots, no bleed.
+
+    `contextvars` promises it; this holds the promise under an actual
+    reload landing while half the tasks are mid-"request".
+    """
+    import asyncio
+
+    config = wiring.configs[0]
+
+    async def request(delay: float) -> tuple[str, str]:
+        with web.scope(config):
+            first = web.current(config).host
+            await asyncio.sleep(delay)
+            second = web.current(config).host
+
+        return first, second
+
+    async def storm() -> list[tuple[str, str]]:
+        early = [asyncio.create_task(request(0.1)) for _ in range(25)]
+        await asyncio.sleep(0.02)
+
+        write(config_file, host="moved-mid-flight")
+        config.reload()
+
+        late = [asyncio.create_task(request(0.0)) for _ in range(25)]
+
+        return await asyncio.gather(*early, *late)
+
+    results = asyncio.run(storm())
+    early, late = results[:25], results[25:]
+
+    for first, second in results:
+        assert first == second, "a task's scope moved under it"
+
+    assert all(first == "db.internal" for first, _ in early), (
+        "a task that began before the reload saw the new document"
+    )
+    assert all(first == "moved-mid-flight" for first, _ in late)
