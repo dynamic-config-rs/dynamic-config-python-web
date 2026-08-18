@@ -29,6 +29,45 @@ for an adapter and an adapter fix should not drag the wheels behind it.
 
 ## [Unreleased]
 
+### Changed
+
+- **The route table is written once.** Six adapters — FastAPI, Litestar,
+  Flask, Quart, Robyn and django-bolt — had each re-declared `/healthz`,
+  `/readyz`, `/metrics` and the two guarded diagnostics routes with the
+  same bodies; they now loop over one shared table and translate only
+  what is genuinely theirs: the path syntax, the response type, and the
+  refusal convention (the WSGI-shaped adapters keep 404, DRF keeps 403,
+  Django Ninja keeps 401). The raw-ASGI scope middleware FastAPI and
+  Litestar carried twice is one module now. No public signature moved;
+  the conformance suite is the proof, thirteen cases against every
+  adapter, unchanged before and after.
+
+  The Django family stays off the table on purpose: its views late-bind
+  the installation per request and are individually routable public API.
+  They share the same `_health`/`_metrics`/`_diagnostics` bodies one
+  level down.
+
+### Fixed
+
+- **A scope over several configurations can no longer tear across a
+  reload.** Each configuration has its own atomic cell and the engine
+  keeps no epoch across them, so opening a scope was N independent reads —
+  and a reload landing between two of them put two generations in one
+  request. `enter()` now reads every install counter before and after,
+  and starts over when anything moved, with the same retry budget as the
+  Rust web core's `Sections::take`. One configuration pays nothing.
+
+  The conformance suite gained the case that would have caught it: a
+  wiring over two configurations, read, moved underneath the request, and
+  read again — thirteen cases now, asked of all nine adapters.
+
+### Added
+
+- **A standalone DRF example.** `examples/09_django_drf.py` — the health
+  surface as APIViews and the diagnostics behind
+  `ConfigDiagnosticsPermission`, beside the django-ninja example instead
+  of folded into the Django one.
+
 ## 0.1.0 — 2026-08-18
 
 ### Added

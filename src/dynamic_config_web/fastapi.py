@@ -39,16 +39,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 
-from ._diagnostics import Guard, check_async, explain_async, never
+from ._asgi import ScopeMiddleware as _SharedScopeMiddleware
+from ._diagnostics import Guard
 from ._errors import MissingFrameworkError
-from ._health import liveness, readiness
-from ._metrics import CONTENT_TYPE, metrics_body
-from ._scope import current, enter, leave
+from ._routes import RouteContext, RouteError, allowed, route_table
+from ._scope import current
 from ._wiring import Wiring
 
 try:
-    from fastapi import APIRouter, HTTPException, Request
-    from fastapi.responses import JSONResponse, PlainTextResponse
+    from fastapi import APIRouter, HTTPException, Request, Response
 except ImportError as absent:  # pragma: no cover - exercised in a subprocess
     raise MissingFrameworkError("FastAPI", "fastapi") from absent
 
@@ -134,34 +133,9 @@ async def lifespan(
         wiring.stop()
 
 
-class _ScopeMiddleware:
-    """Opens one request scope per request, in raw ASGI.
-
-    Raw rather than `BaseHTTPMiddleware`: the base class runs the
-    downstream app in a task of its own, which is exactly the boundary a
-    `ContextVar` set here would not cross — and it costs a queue per
-    request for a job that is two dictionary writes.
-    """
-
-    def __init__(self, app: Any, wiring: Wiring) -> None:
-        self.app = app
-        self.wiring = wiring
-
-    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        if scope["type"] != "http":
-            # A websocket lives longer than a "request" and a lifespan
-            # message is not one at all; neither should be pinned to a
-            # snapshot taken at connect time.
-            await self.app(scope, receive, send)
-
-            return
-
-        token = enter(self.wiring.configs)
-
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            leave(token)
+# The raw-ASGI scope middleware lives in `_asgi` now — FastAPI and
+# Litestar mount the same fifteen lines, so the lines exist once.
+_ScopeMiddleware = _SharedScopeMiddleware
 
 
 def router(
@@ -178,57 +152,55 @@ def router(
     `setup` includes this; taking it directly is for an application that
     wants them under its own prefix, behind its own dependencies, or in a
     sub-application it mounts elsewhere.
+
+    The routes themselves are the shared table — nine adapters, one
+    definition — and this function is only the translation into FastAPI:
+    a path parameter for `{path}`, `Response` from a `Reply`, and
+    `HTTPException` from a refusal.
     """
     routes = APIRouter(prefix=prefix)
 
-    @routes.get("/healthz", include_in_schema=False)
-    async def healthz() -> JSONResponse:
-        """The process is up. Configuration has no say in this one."""
-        report = liveness()
+    table = route_table(
+        wiring,
+        metrics=metrics,
+        stale_after=stale_after,
+        guard=guard,
+        diagnostics_prefix=diagnostics_prefix,
+    )
 
-        return JSONResponse(report.body, status_code=report.status_code)
+    for route in table:
+        mount = route.path.replace("{path}", "{path:path}")
 
-    @routes.get("/readyz", include_in_schema=False)
-    async def readyz() -> JSONResponse:
-        """Serving something, and the reloads since have worked."""
-        report = readiness(*wiring.configs, stale_after=stale_after)
+        def make(entry: Any) -> Callable[..., Any]:
+            async def endpoint(request: Request, path: str = "") -> Response:
+                if entry.guarded:
+                    try:
+                        allowed(request, guard)
+                    except RouteError as refused:
+                        raise HTTPException(
+                            status_code=refused.status, detail=refused.detail
+                        ) from None
 
-        return JSONResponse(report.body, status_code=report.status_code)
+                context = RouteContext(
+                    path_param=path or None, query=request.query_params
+                )
 
-    if metrics:
+                try:
+                    reply = await entry.handle_async(context)
+                except RouteError as refused:
+                    raise HTTPException(
+                        status_code=refused.status, detail=refused.detail
+                    ) from None
 
-        @routes.get("/metrics", include_in_schema=False)
-        async def prometheus() -> PlainTextResponse:
-            """The engine's twelve series, built per scrape."""
-            return PlainTextResponse(
-                metrics_body(*wiring.configs), media_type=CONTENT_TYPE
-            )
+                return Response(
+                    content=reply.body,
+                    status_code=reply.status,
+                    media_type=reply.content_type,
+                )
 
-    # `None` and the shipped `never` both mean *do not build these* — the
-    # first because nobody asked, the second because somebody wrote the
-    # refusal out. Anything else is a decision, and the routes exist.
-    if guard is not None and guard is not never:
-        diagnostics = APIRouter(prefix=diagnostics_prefix)
+            return endpoint
 
-        @diagnostics.get("/explain/{path:path}", include_in_schema=False)
-        async def explain_path(request: Request, path: str) -> PlainTextResponse:
-            """Every layer's answer for one dotted path."""
-            _allowed(request, guard)
-
-            config = _named(wiring, request.query_params.get("config"))
-
-            return PlainTextResponse(await explain_async(config, path))
-
-        @diagnostics.get("/check", include_in_schema=False)
-        async def check_all(request: Request) -> JSONResponse:
-            """Would each configuration load, and any unknown keys."""
-            _allowed(request, guard)
-
-            return JSONResponse(
-                {config.key: await check_async(config) for config in wiring.configs}
-            )
-
-        routes.include_router(diagnostics)
+        routes.get(mount, include_in_schema=False, name=route.name)(make(route))
 
     return routes
 
@@ -324,32 +296,3 @@ def setup(
         )
 
     return wiring
-
-
-def _allowed(request: Request, guard: Guard) -> None:
-    """Refuses a request the guard does not accept, as a 403."""
-    if not guard(request):
-        raise HTTPException(status_code=403, detail="not permitted")
-
-
-def _named(wiring: Wiring, key: Optional[str]) -> Any:
-    """The configuration a diagnostics request names, or the only one."""
-    configs = wiring.configs
-
-    if key is None:
-        if len(configs) == 1:
-            return configs[0]
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "this application has more than one configuration; name one "
-                f"with ?config=, from: {', '.join(c.key for c in configs)}"
-            ),
-        )
-
-    for config in configs:
-        if config.key == key:
-            return config
-
-    raise HTTPException(status_code=404, detail=f"no configuration named {key!r}")

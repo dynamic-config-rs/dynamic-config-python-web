@@ -36,17 +36,17 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
-from ._diagnostics import Guard, check_async, explain_async, never
+from ._asgi import ScopeMiddleware as _SharedScopeMiddleware
+from ._diagnostics import Guard
 from ._errors import MissingFrameworkError
-from ._health import liveness, readiness
-from ._metrics import CONTENT_TYPE, metrics_body
-from ._scope import current, enter, leave
+from ._routes import RouteContext, RouteError, allowed, route_table
+from ._scope import current
 from ._wiring import Wiring
 
 try:
     from litestar import Response, Router, get
     from litestar.di import Provide
-    from litestar.exceptions import HTTPException, NotFoundException
+    from litestar.exceptions import HTTPException
 
     # `FromPath` rather than a bare `path: str`: the inferred style is
     # deprecated in 2.x and gone in 3, and an adapter must not be the
@@ -73,7 +73,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from litestar import Litestar
     from litestar.config.app import AppConfig
     from litestar.connection import Request
-    from litestar.types import Receive, Scope, Send
 
     from dynamic_config import ConfigGroup, DynamicConfig
 
@@ -104,32 +103,12 @@ def provide_config(config: DynamicConfig[Any]) -> Provide:
     return Provide(dependency, sync_to_thread=False, use_cache=False)
 
 
-class ScopeMiddleware:
-    """Opens one request scope per request, in raw ASGI.
+class ScopeMiddleware(_SharedScopeMiddleware):
+    """The shared raw-ASGI scope middleware, under this adapter's name.
 
-    Litestar's `AbstractMiddleware` would serve as well, but raw ASGI is
-    the same thing without a base class and is what the other adapters
-    use — one shape to review rather than seven.
+    A subclass rather than an alias so the class's qualname says which
+    adapter mounted it in a traceback.
     """
-
-    def __init__(self, app: Any, wiring: Wiring) -> None:
-        self.app = app
-        self.wiring = wiring
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        # `str(...)`, because Litestar types the key as its own enum and
-        # the value on the wire is the plain ASGI string either way.
-        if str(scope["type"]) != "http":
-            await self.app(scope, receive, send)
-
-            return
-
-        token = enter(self.wiring.configs)
-
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            leave(token)
 
 
 def router(
@@ -141,66 +120,71 @@ def router(
     guard: Optional[Guard] = None,
     diagnostics_path: str = "/_config",
 ) -> Router:
-    """The health, metrics and diagnostics routes, as a Litestar router."""
+    """The health, metrics and diagnostics routes, as a Litestar router.
 
-    @get("/healthz", include_in_schema=False, sync_to_thread=False)
-    def healthz() -> Response[Any]:
-        """The process is up. Configuration has no say in this one."""
-        report = liveness()
+    The routes are the shared table; this function only translates —
+    Litestar's `{path:path}` parameter, its `Response`, and its
+    `HTTPException` from a refusal.
+    """
+    table = route_table(
+        wiring,
+        metrics=metrics,
+        stale_after=stale_after,
+        guard=guard,
+        diagnostics_prefix=diagnostics_path,
+    )
 
-        return Response(report.body, status_code=report.status_code)
+    handlers: list[Any] = []
 
-    @get("/readyz", include_in_schema=False, sync_to_thread=False)
-    def readyz() -> Response[Any]:
-        """Serving something, and the reloads since have worked."""
-        report = readiness(*wiring.configs, stale_after=stale_after)
+    def make(entry: Any) -> Any:
+        route_path = entry.path.replace("{path}", "{path:path}")
 
-        return Response(report.body, status_code=report.status_code)
+        if "{path:path}" in route_path:
 
-    handlers: list[Any] = [healthz, readyz]
+            @get(route_path, include_in_schema=False, name=f"config_{entry.name}")
+            async def handler(
+                request: Request[Any, Any, Any], path: FromPath[str]
+            ) -> Response[str]:
+                return await _answer(entry, request, path)
 
-    if metrics:
+        else:
 
-        @get("/metrics", include_in_schema=False, sync_to_thread=False)
-        def prometheus() -> Response[str]:
-            """The engine's series, built per scrape."""
-            return Response(
-                metrics_body(*wiring.configs),
-                media_type=CONTENT_TYPE,
-            )
+            @get(route_path, include_in_schema=False, name=f"config_{entry.name}")
+            async def handler(request: Request[Any, Any, Any]) -> Response[str]:
+                return await _answer(entry, request, None)
 
-        handlers.append(prometheus)
+        return handler
 
-    if guard is not None and guard is not never:
+    async def _answer(
+        entry: Any, request: Request[Any, Any, Any], raw_path: Optional[str]
+    ) -> Response[str]:
+        if entry.guarded:
+            try:
+                allowed(request, guard)
+            except RouteError as refused:
+                raise HTTPException(
+                    status_code=refused.status, detail=refused.detail
+                ) from None
 
-        @get(
-            f"{diagnostics_path}/explain/{{path:path}}",
-            include_in_schema=False,
+        context = RouteContext(
+            # A Litestar path parameter arrives with its leading slash.
+            path_param=None if raw_path is None else raw_path.lstrip("/"),
+            query=request.query_params,
         )
-        async def explain_path(
-            request: Request[Any, Any, Any], path: FromPath[str]
-        ) -> Response[str]:
-            """Every layer's answer for one dotted path."""
-            _allowed(request, guard)
 
-            config = _named(wiring, request.query_params.get("config"))
-            # A path parameter arrives with its leading slash.
-            dotted = path.lstrip("/")
+        try:
+            reply = await entry.handle_async(context)
+        except RouteError as refused:
+            raise HTTPException(
+                status_code=refused.status, detail=refused.detail
+            ) from None
 
-            return Response(
-                await explain_async(config, dotted), media_type="text/plain"
-            )
+        return Response(
+            reply.body, status_code=reply.status, media_type=reply.content_type
+        )
 
-        @get(f"{diagnostics_path}/check", include_in_schema=False)
-        async def check_all(request: Request[Any, Any, Any]) -> Response[Any]:
-            """Would each configuration load, and any unknown keys."""
-            _allowed(request, guard)
-
-            return Response(
-                {config.key: await check_async(config) for config in wiring.configs}
-            )
-
-        handlers.extend([explain_path, check_all])
+    for entry in table:
+        handlers.append(make(entry))
 
     return Router(path=path, route_handlers=handlers)
 
@@ -301,20 +285,6 @@ class DynamicConfigPlugin(InitPlugin):
     def _middleware(self, app: Any) -> ScopeMiddleware:
         """The scope middleware, bound to this plugin's wiring."""
         return ScopeMiddleware(app, self.wiring)
-
-
-def _allowed(request: Request[Any, Any, Any], guard: Guard) -> None:
-    """Refuses a request the guard does not accept."""
-    if not guard(request):
-        raise NotFoundException()
-
-
-def _named(wiring: Wiring, key: Optional[str]) -> Any:
-    """The configuration a diagnostics request names, or the only one."""
-    try:
-        return wiring.config(key)
-    except LookupError as unknown:
-        raise HTTPException(status_code=400, detail=str(unknown)) from unknown
 
 
 def plugins(

@@ -97,6 +97,37 @@ def _members(targets: Iterable[Any]) -> list[Any]:
     return configs
 
 
+#: How many times :func:`enter` re-reads when a reload lands mid-read.
+#: The same constant, for the same reason, as the Rust web core's
+#: `ATTEMPTS`: past this, the last read is served — no worse than not
+#: checking, which is what every caller had before the check existed.
+_ATTEMPTS = 8
+
+
+def _read_once(configs: list[Any]) -> _Snapshot:
+    """One `try_current()` per configuration, into a snapshot."""
+    by_object: dict[Any, Any] = {}
+    by_key: dict[str, Any] = {}
+
+    for config in configs:
+        model = config.try_current()
+        by_object[config] = model
+        by_key[config.key] = model
+
+    return _Snapshot(by_object, by_key)
+
+
+def _generations(configs: list[Any]) -> tuple[int, ...]:
+    """Every configuration's install counter, in list order.
+
+    The engine bumps the counter *after* the model is readable, so a
+    counter can lag its model but never lead it — the comparison in
+    :func:`enter` therefore errs only toward a harmless extra read,
+    never toward accepting a torn one.
+    """
+    return tuple(config.generation for config in configs)
+
+
 def enter(targets: Iterable[DynamicConfig[Any] | ConfigGroup]) -> Token[Any]:
     """Opens a scope holding one read of each configuration in `targets`.
 
@@ -106,17 +137,33 @@ def enter(targets: Iterable[DynamicConfig[Any] | ConfigGroup]) -> Token[Any]:
     503 the health surface should answer, not an exception from the
     middleware that opened the scope.
 
+    With more than one configuration the reads have to *agree*: each has
+    its own atomic cell and the engine keeps no epoch across them, so N
+    reads are N independent loads, and a reload landing between two of
+    them would put two generations in one scope — exactly the tear this
+    module exists to prevent, one level up. So the counters are read
+    before and after, and the read starts over if anything moved. The
+    Rust web core's `Sections::take` makes the same check with the same
+    retry budget.
+
     Answers the token :func:`leave` restores.
     """
-    by_object: dict[Any, Any] = {}
-    by_key: dict[str, Any] = {}
+    configs = _members(targets)
 
-    for config in _members(targets):
-        model = config.try_current()
-        by_object[config] = model
-        by_key[config.key] = model
+    # A single configuration cannot straddle anything.
+    if len(configs) < 2:
+        return _SNAPSHOT.set(_read_once(configs))
 
-    return _SNAPSHOT.set(_Snapshot(by_object, by_key))
+    for _ in range(_ATTEMPTS):
+        before = _generations(configs)
+        snapshot = _read_once(configs)
+
+        if _generations(configs) == before:
+            return _SNAPSHOT.set(snapshot)
+
+    # Reloading faster than a read completes, eight times running. The
+    # last read is served: no worse than not checking.
+    return _SNAPSHOT.set(_read_once(configs))
 
 
 def leave(token: Token[Any]) -> None:

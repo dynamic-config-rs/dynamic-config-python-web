@@ -34,14 +34,14 @@ by hand is exactly what `api()` does.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from ._diagnostics import Guard, check_async, explain_async, never
+from ._diagnostics import Guard
 from ._errors import MissingFrameworkError
-from ._health import liveness, readiness
-from ._metrics import CONTENT_TYPE, metrics_body
+from ._routes import RouteContext, RouteError, allowed, route_table
 from ._scope import current, enter, get, leave
 from ._wiring import Wiring
 
@@ -153,58 +153,72 @@ def router(
     """
     routes: Any = Router(prefix=prefix)
 
+    table = {
+        entry.name: entry
+        for entry in route_table(
+            running,
+            metrics=metrics,
+            stale_after=stale_after,
+            guard=guard,
+            diagnostics_prefix=diagnostics_prefix,
+        )
+    }
+
+    # Declared one by one rather than in a loop: django-bolt validates a
+    # handler against its *signature*, and the path parameter's presence
+    # changes it. The bodies are the shared table's; only the signatures
+    # are this framework's.
+
+    async def answer(entry: Any, request: Any, path: Optional[str]) -> Any:
+        if entry.guarded:
+            try:
+                allowed(request, guard, refused=404)
+            except RouteError as stopped:
+                return Response({"detail": stopped.detail}, status_code=stopped.status)
+
+        context = RouteContext(
+            path_param=None if path is None else path.lstrip("/"),
+            query={} if request is None else request.query,
+        )
+
+        try:
+            reply = await entry.handle_async(context)
+        except RouteError as stopped:
+            return Response({"detail": stopped.detail}, status_code=stopped.status)
+
+        # Bolt's `Response` serialises its body itself, so a JSON reply
+        # goes back to a dict here — handing it the rendered string would
+        # double-encode it.
+        body: Any = reply.body
+
+        if reply.content_type == "application/json":
+            body = json.loads(reply.body)
+
+        return Response(body, status_code=reply.status, media_type=reply.content_type)
+
     @routes.get("/healthz")
     async def healthz() -> Any:
-        """The process is up. Configuration has no say in this one."""
-        report = liveness()
-
-        return Response(report.body, status_code=report.status_code)
+        return await answer(table["healthz"], None, None)
 
     @routes.get("/readyz")
     async def readyz() -> Any:
-        """Serving something, and the reloads since have worked."""
-        report = readiness(*running.configs, stale_after=stale_after)
+        return await answer(table["readyz"], None, None)
 
-        return Response(report.body, status_code=report.status_code)
-
-    if metrics:
+    if "metrics" in table:
 
         @routes.get("/metrics")
         async def prometheus() -> Any:
-            """The engine's series, built per scrape."""
-            return Response(
-                metrics_body(*running.configs),
-                media_type=CONTENT_TYPE,
-            )
+            return await answer(table["metrics"], None, None)
 
-    if guard is not None and guard is not never:
+    if "explain" in table:
 
         @routes.get(f"{diagnostics_prefix}/explain/{{path:path}}")
         async def explain_path(request: Any, path: str) -> Any:
-            """Every layer's answer for one dotted path, off the loop."""
-            if not guard(request):
-                return Response({"detail": "not found"}, status_code=404)
-
-            try:
-                # `request.query`, which is django-bolt's name for it.
-                config = running.config(request.query.get("config"))
-            except LookupError as unknown:
-                return Response({"detail": str(unknown)}, status_code=400)
-
-            return Response(
-                await explain_async(config, path.lstrip("/")),
-                media_type="text/plain",
-            )
+            return await answer(table["explain"], request, path)
 
         @routes.get(f"{diagnostics_prefix}/check")
         async def check_all(request: Any) -> Any:
-            """Would each configuration load, and any unknown keys."""
-            if not guard(request):
-                return Response({"detail": "not found"}, status_code=404)
-
-            return Response(
-                {config.key: await check_async(config) for config in running.configs}
-            )
+            return await answer(table["check"], request, None)
 
     return routes
 

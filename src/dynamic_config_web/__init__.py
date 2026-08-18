@@ -1,6 +1,6 @@
 """Native web-framework integrations for `dynamic-config-py`.
 
-Seven frameworks, one shape. Whatever the framework calls its startup
+Nine adapters, one shape. Whatever the framework calls its startup
 hook, its dependency injection and its router, an integration here does
 the same five things:
 

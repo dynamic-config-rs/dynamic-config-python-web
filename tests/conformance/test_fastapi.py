@@ -73,6 +73,30 @@ class FastAPIDriver:
                 "same_object": first is second,
             }
 
+        @app.get("/pair")
+        def pair() -> dict[str, Any]:
+            """Every configuration in the wiring, read under one scope.
+
+            Reads both, moves both underneath itself, reads both again:
+            a scope over several configurations pins all of them, not
+            just the first.
+            """
+            first = {c.key: current(c).host for c in wiring.configs}
+
+            for member in wiring.configs:
+                if member.key != "db":
+                    member.set_override("host", "moved.internal")
+                member.reload()
+
+            second = {c.key: current(c).host for c in wiring.configs}
+
+            return {
+                "db_first": first["db"],
+                "db_second": second["db"],
+                "extra_first": first.get("extra"),
+                "extra_second": second.get("extra"),
+            }
+
         with TestClient(app) as client:
             yield client
 
