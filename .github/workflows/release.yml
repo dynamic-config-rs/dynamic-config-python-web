@@ -95,23 +95,25 @@ jobs:
     if: needs.decide.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      # Trusted publishing: PyPI verifies THIS workflow's OIDC identity —
+      # no PYPI_TOKEN to store, leak or rotate. The `dynamic-config-py-web`
+      # project carries a Trusted Publisher entry on PyPI naming this
+      # repository and this file; OUTSTANDING.md spells the console entry.
+      id-token: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: distributions
           path: dist
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.12"
-      - run: pip install twine
-      # `--skip-existing`: a version on PyPI is permanent, so the only way
+      # `skip-existing`: a version on PyPI is permanent, so the only way
       # forward after a partial failure is a rerun that publishes the
       # remainder. `release-web.sh --check` is what keeps that from being
       # the normal case.
-      - run: twine upload --skip-existing dist/*
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
+          skip-existing: true
 
   tag-and-release:
     name: tag and GitHub release

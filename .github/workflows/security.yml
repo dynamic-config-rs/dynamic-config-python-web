@@ -12,8 +12,6 @@ name: Security
 # No push trigger for `dev` — same reasoning as ci.yml: dev travels through
 # pull requests, and a push twin under required checks poisons the gate.
 on:
-  push:
-    branches: [main]
   pull_request:
   schedule:
     - cron: "17 6 * * 1"
@@ -28,6 +26,24 @@ permissions:
   contents: read
 
 jobs:
+  policy:
+    name: the security policy names the current line
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The stale-table drift this org has already lived through once:
+      # SECURITY.md said 0.0.x while the workspace shipped 0.7. The table's
+      # top row must name the line that is actually published.
+      - run: |
+          version=$(grep -m1 '__version__' src/dynamic_config_web/__init__.py | cut -d'"' -f2)
+          line="${version%.*}.x"
+          if ! grep -qF "| ${line}" SECURITY.md; then
+            echo "::error file=SECURITY.md::the supported-versions table does not name ${line} (workspace is ${version})"
+            exit 1
+          fi
+          echo "SECURITY.md names ${line} — current"
+
   osv:
     name: advisories, every ecosystem
     runs-on: ubuntu-latest
@@ -126,7 +142,7 @@ jobs:
   # — which is the whole point of running it.
   security-ok:
     name: Security is green
-    needs: [osv, supply-chain, published]
+    needs: [policy, osv, supply-chain, published]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

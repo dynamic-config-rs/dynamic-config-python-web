@@ -63,7 +63,7 @@ classifiers = [
 # One, and it is the whole point: this package is adapters over the engine.
 # No framework is required — each is an extra, and importing this package
 # imports none of them.
-dependencies = ["dynamic-config-py>=0.2"]
+dependencies = ["dynamic-config-py>=0.3.1"]
 dynamic = ["version"]
 
 [project.entry-points.pytest11]

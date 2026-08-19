@@ -13,6 +13,7 @@ is exactly what a log line needs.
 from __future__ import annotations
 
 import logging
+import warnings
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -81,7 +82,7 @@ def _line(config: Any, log: logging.Logger, level: int) -> Any:
 async def stream_events(
     config: DynamicConfig[Any],
     *,
-    failure_poll: Optional[float] = 1.0,
+    failure_poll: Optional[float] = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Installs *and* refusals, as JSON-shaped dictionaries.
 
@@ -89,14 +90,24 @@ async def stream_events(
             await websocket.send_json(event)
 
     What a server-sent-events route, a websocket or a structured logger
-    consumes. `failure_poll` is what makes a refusal visible at all: a
-    load that installed nothing bumps no generation, so there is nothing
-    to wake a stream with — the engine checks the status on that interval
-    instead. `None` reports installs only and starts no timer.
+    consumes. A refusal wakes the stream natively (dynamic-config-py
+    0.4+): the engine's failure hook signals the same thread an install
+    does, so nothing is polled and nothing keeps the loop up.
+
+    `failure_poll` is deprecated and ignored — the interval refusals
+    were polled at, before they could wake anything.
 
     No event carries a value.
     """
-    async for event in config.events(failure_poll=failure_poll):
+    if failure_poll is not None:
+        warnings.warn(
+            "failure_poll is ignored: a refused reload wakes the stream "
+            "natively now, and nothing is polled",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    async for event in config.events():
         if isinstance(event, ReloadFailed):
             yield {
                 "type": "reload_failed",

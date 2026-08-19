@@ -76,7 +76,12 @@ workflow by hand.
 
 ## What an operator has to have ready
 
-`PYPI_TOKEN` as a repository secret, with upload rights to this project.
+**No token.** The publish job authenticates through PyPI's Trusted
+Publishing (OIDC): the one-time console entry — PyPI →
+`dynamic-config-py-web` → Settings → Publishing → *Add a trusted
+publisher* — names owner `dynamic-config-rs`, repository
+`dynamic-config-python-web`, workflow `release.yml`. A leftover
+`PYPI_TOKEN` secret is inert and should be revoked.
 Nothing else.
 
 ## Afterwards

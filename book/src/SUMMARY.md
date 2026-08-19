@@ -27,6 +27,7 @@
 - [Readiness a Load Balancer Can Use](use-cases/readiness.md)
 - [Diagnostics Behind a Token](use-cases/diagnostics.md)
 - [Configuration in a Test](use-cases/testing-a-service.md)
+- [A Production FastAPI Service](use-cases/production-fastapi.md)
 
 # Advanced
 
