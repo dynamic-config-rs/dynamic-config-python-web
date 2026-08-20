@@ -4,6 +4,14 @@ Three routes, three questions, and the reason they are three: an operator
 who cannot tell them apart either restarts a process that was serving fine
 or keeps routing to one that has been stale since Tuesday.
 
+The definitions — why serving last-known-good is *ready*, why degraded
+is a detail and not a state, the JSON shape — are the engine book's
+[Readiness & Liveness](https://dynamic-config-rs.github.io/readiness.html)
+contract; the routes below are its ASGI rendering. The metric names are
+likewise the
+[Metrics Contract](https://dynamic-config-rs.github.io/metrics-contract.html)'s,
+not this package's to invent.
+
 ## `/healthz` — liveness
 
 Always 200. Configuration has no say in it.

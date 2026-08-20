@@ -11,15 +11,16 @@ of what this package is for, and pinning per message is a decision only the
 application can make. `latest(config)` is the honest read there, and
 `stream_events(config)` is how a connection follows reloads.
 
-## A refused reload cannot wake anything
+## A refused reload wakes `stream_events` — and nothing else
 
-The engine bumps a generation when a document *installs*. A load that
-installed nothing does not, so nothing can be notified of it: a `/readyz`
-scrape notices a refusal because it reads `status()`, and an event stream
-notices it only if it was given `failure_poll`. There is no push.
-
-That is the engine's shape rather than this package's, and it is documented
-there too.
+Since engine 0.7.1 a refusal pushes: `stream_events` delivers
+`reload_failed` the moment it happens, no polling (`failure_poll` is
+accepted, ignored, and warns). What a refusal still does not do is move
+a *model*: `/readyz` reports it because it reads `status()`, and a
+dependency keeps answering last-known-good — the split the
+[engine book's Change Notification
+page](https://dynamic-config-rs.github.io/change-notification.html)
+holds for all three languages.
 
 ## No `/config/snapshot`
 

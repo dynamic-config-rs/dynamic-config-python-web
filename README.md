@@ -98,6 +98,8 @@ add no cache, no copy and no second source of truth — `db.current()` is
 still the read path, and `current()` here is that read taken once per
 request.
 
+What you may build on and find unchanged tomorrow is written down: the [Compatibility Contract](https://dynamic-config-rs.github.io/compatibility.html).
+
 ## License
 
 MIT.

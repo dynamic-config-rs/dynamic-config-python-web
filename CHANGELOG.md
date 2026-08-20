@@ -29,6 +29,28 @@ for an adapter and an adapter fix should not drag the wheels behind it.
 
 ## [Unreleased]
 
+## 0.2.1 — 2026-08-20
+
+### Changed
+
+- **`dynamic-config-py>=0.3.1` is the floor**: the base wheel's
+  failure events arrive natively there, and `stream_events` rides
+  them without a poll. The `failure_poll` parameter is accepted and
+  warns, exactly as the base wheel treats it.
+
+### Changed
+
+- **`stream_events` no longer polls.** A refused reload wakes the
+  stream natively (dynamic-config-py 0.3.1's failure hook), so
+  `ReloadFailed` events arrive when the refusal happens and nothing
+  runs on a timer. Requires `dynamic-config-py>=0.3.1`.
+
+### Deprecated
+
+- **`stream_events(failure_poll=...)`** is accepted, ignored, and
+  warns: the interval refusals were polled at, now that they wake the
+  stream themselves. Remove the argument.
+
 ## 0.2.0 — 2026-08-18
 
 ### Changed
