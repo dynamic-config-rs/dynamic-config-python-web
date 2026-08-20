@@ -40,7 +40,7 @@ from __future__ import annotations
 
 #: The distribution's version, and the single place it is written: the
 #: build backend reads this file rather than the other way round.
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from ._diagnostics import (
     Guard,

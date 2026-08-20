@@ -29,6 +29,8 @@ for an adapter and an adapter fix should not drag the wheels behind it.
 
 ## [Unreleased]
 
+## 0.2.1 — 2026-08-20
+
 ### Changed
 
 - **`dynamic-config-py>=0.3.1` is the floor**: the base wheel's
