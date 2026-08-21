@@ -21,8 +21,14 @@
 # CHANGELOG.md), so the answer to "Flask 2.2 has an advisory" is usually a
 # note in the book, not a silent floor bump — and never an entry here.
 
-[[IgnoredVulns]]
-# A placeholder that matches nothing, kept so the shape of an entry is
-# visible when the first real one is needed. Remove it then.
-id = "GHSA-0000-0000-0000"
-reason = "example entry; matches nothing"
+# The shape of an entry, as a comment rather than as a live rule. A
+# placeholder that matches nothing is still an ignore rule that a reader
+# has to check matches nothing, and the first person to skim this file
+# should not have to.
+#
+#   [[IgnoredVulns]]
+#   id = "GHSA-xxxx-xxxx-xxxx"
+#   reason = """
+#   What the advisory is, why this graph does not reach it or cannot move,
+#   and the condition that makes this entry expire.
+#   """
